@@ -127,7 +127,7 @@ AudioHardware::AudioHardware() :
                 ept->id = cnt;
                 ioctl(m7xsnddriverfd, SND_GET_ENDPOINT, ept);
                 LOGV("cnt = %d ept->name = %s ept->id = %d\n", cnt, ept->name, ept->id);
-                LOGI("cnt = %d ept->name = %s ept->id = %d\n", cnt, ept->name, ept->id);
+
 #define CHECK_FOR(desc) if (!strcmp(ept->name, #desc)) SND_DEVICE_##desc = ept->id;
                 CHECK_FOR(CURRENT);
                 CHECK_FOR(HANDSET);
@@ -149,10 +149,11 @@ AudioHardware::AudioHardware() :
                 CHECK_FOR(VOICE_RECORDER);
                 CHECK_FOR(VOICE_RECORDER_HEADSET);
 #undef CHECK_FOR
-            } }
+            }
+        }
         else LOGE("Could not retrieve number of MSM SND endpoints.");
 
-        int AUTO_VOLUME_ENABLED = 0; // setting enabled as default
+        int AUTO_VOLUME_ENABLED = 1; // setting enabled as default
 
         static const char *const path = "/system/etc/AutoVolumeControl.txt";
         int txtfd;
@@ -1082,7 +1083,7 @@ static status_t set_volume_rpc(uint32_t device,
                                int m7xsnddriverfd)
 {
 #if LOG_SND_RPC
-    LOGD("rpc_snd_set_volume(%d, %d, %d)\n", device, method, volume);
+    LOGD("SET VOLUME: rpc_snd_set_volume(%d, %d, %d)\n", device, method, volume);
 #endif
 
     if (device == -1UL) return NO_ERROR;
@@ -1105,6 +1106,8 @@ static status_t set_volume_rpc(uint32_t device,
      args.method = method;
      args.volume = volume;
 
+     LOGD("args: device %d, method %d, volume %d", args.device, args.method, args.volume);
+
      if (ioctl(m7xsnddriverfd, SND_SET_VOLUME, &args) < 0) {
          LOGE("snd_set_volume error.");
          return -EIO;
@@ -1122,9 +1125,8 @@ status_t AudioHardware::setVoiceVolume(float v)
         v = 1.0;
     }
 
-    int vol = lrint(v * 7.0);
-    LOGD("setVoiceVolume(%f)\n", v);
-    LOGI("Setting in-call volume to %d (available range is 0 to 7)\n", vol);
+    int vol = lrint(v * 5.0); //This was set to 7, but in-call volume range is from 0 to 5 (see set_volume_rpc at line 1098) or just try to change volume level when you're in call. If you use the volume buttons you'll be able to set volume only from 0 to 5, not 7!
+    LOGD("Setting in-call volume to %d (available range is 0 to 5)\n", vol); //Read above
 
     if ((mCurSndDevice != -1) && ((mCurSndDevice == SND_DEVICE_TTY_HEADSET) || (mCurSndDevice == SND_DEVICE_TTY_VCO)))
     {
@@ -1179,9 +1181,8 @@ static status_t do_route_audio_rpc(uint32_t device,
         return NO_ERROR;
 
 #if LOG_SND_RPC
-    LOGD("rpc_snd_set_device(%d, %d, %d)\n", device, ear_mute, mic_mute);
+    LOGD("DO ROUTING: rpc_snd_set_device(%d, %d, %d)\n", device, ear_mute, mic_mute);
 #endif
-    LOGI("rpc_snd_set_device(%d, %d, %d)\n", device, ear_mute, mic_mute);
 
     if (m7xsnddriverfd < 0) {
         LOGE("Can not open snd device");
@@ -1271,7 +1272,6 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input)
 
     if (input != NULL) {
         uint32_t inputDevice = input->devices();
-        LOGI("do input routing device %x\n", inputDevice);
         mBuiltinMicSelected = (inputDevice == AudioSystem::DEVICE_IN_BUILTIN_MIC);
         // ignore routing device information when we start a recording in voice
         // call
@@ -1356,8 +1356,8 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input)
                 LOGI("Routing audio to FM Headset\n");
                 new_snd_device = SND_DEVICE_STEREO_HEADSET_FMRADIO;
             } else {
-                /* Previuosly it was routed to SND_DEVICE_STEREO_HEADSET. Unfortunately, this device, is adapted only for Headset (with mic), so if headphones are used, the other person in line won't be able to hear us. But, SND_DEVICE_HEADSET_NO_MIC decrease a lot the volume while listening to music. So, we route audio according to phone status, if in call, it is routed to SND_DEVICE_HEADSET_NO_MIC, otherwise, it will be routed to SND_DEVICE_STEREO_HEADSET.*/
-                LOGI("Routing audio to No microphone Wired Headset %s\n", mMode == AudioSystem::MODE_IN_CALL ? "Being in-call, the routing device will be SND_DEVICE_HEADSET_NO_MIC" : "Being not in-call, the routing device will be SND_DEVICE_STEREO_HEADSET");
+                /* Previously it was routed to SND_DEVICE_STEREO_HEADSET only. But this device uses Headset with mic only, so if headphones are used, the other person in line won't be able to hear us when in call. But SND_DEVICE_HEADSET_NO_MIC decrease a lot the volume while not in call. So, the audio will be routed according to phone status, if in call, it is routed to SND_DEVICE_HEADSET_NO_MIC, otherwise, it will be routed to SND_DEVICE_STEREO_HEADSET.*/
+                LOGI("Routing audio to No microphone Wired Headset. Being %s in-call routing device will be %s\n", mMode == AudioSystem::MODE_IN_CALL ? "\b" : "not", mMode == AudioSystem::MODE_IN_CALL ? "SND_DEVICE_HEADSET_NO_MIC" : "SND_DEVICE_STEREO_HEADSET");
                 new_snd_device = mMode == AudioSystem::MODE_IN_CALL ? SND_DEVICE_HEADSET_NO_MIC : SND_DEVICE_STEREO_HEADSET;
             }
             new_post_proc_feature_mask = (ADRC_ENABLE | EQ_ENABLE | RX_IIR_ENABLE | MBADRC_ENABLE);
