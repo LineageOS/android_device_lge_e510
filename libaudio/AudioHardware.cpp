@@ -127,6 +127,7 @@ AudioHardware::AudioHardware() :
                 ept->id = cnt;
                 ioctl(m7xsnddriverfd, SND_GET_ENDPOINT, ept);
                 LOGV("cnt = %d ept->name = %s ept->id = %d\n", cnt, ept->name, ept->id);
+
 #define CHECK_FOR(desc) if (!strcmp(ept->name, #desc)) SND_DEVICE_##desc = ept->id;
                 CHECK_FOR(CURRENT);
                 CHECK_FOR(HANDSET);
@@ -136,6 +137,7 @@ AudioHardware::AudioHardware() :
                 CHECK_FOR(BT_EC_OFF);
                 CHECK_FOR(HEADSET);
                 CHECK_FOR(STEREO_HEADSET);
+                CHECK_FOR(HEADSET_NO_MIC); //This was not set, strange...
                 CHECK_FOR(HEADSET_AND_SPEAKER);
                 CHECK_FOR(IN_S_SADC_OUT_HANDSET);
                 CHECK_FOR(IN_S_SADC_OUT_SPEAKER_PHONE);
@@ -541,7 +543,7 @@ int check_and_set_audpp_parameters(char *buf, int size)
         if (!(p = strtok(NULL, seps)))
             goto token_err;
 
-    } else if (buf[0] == 'C' && ((buf[1] == '1') || (buf[1] == '2') || (buf[1] == '3'))) {
+    } else if ((buf[0] == 'C') && ((buf[1] == '1') || (buf[1] == '2') || (buf[1] == '3'))) {
         /* This is the EQ record we are looking for.  Tokenize it */
         if(buf[1] == '1') device_id=0;
         if(buf[1] == '2') device_id=1;
@@ -919,10 +921,10 @@ static int msm72xx_enable_postproc(bool state)
         device_id = 1;
         LOGI("set device to SND_DEVICE_HANDSET device_id=1");
     }
-    if(snd_device == SND_DEVICE_STEREO_HEADSET)
-    {
+    if(snd_device == SND_DEVICE_STEREO_HEADSET || snd_device == SND_DEVICE_HEADSET_NO_MIC)
+    { //I don't really know, if this change is useful
         device_id = 2;
-        LOGI("set device to SND_DEVICE_STEREO_HEADSET device_id=2");
+        LOGI("set device to %s device_id=2", snd_device == SND_DEVICE_STEREO_HEADSET ? "SND_DEVICE_STEREO_HEADSET" : "SND_DEVICE_HEADSET_NO_MIC");
     }
 
     fd = open(PCM_CTL_DEVICE, O_RDWR);
@@ -1081,7 +1083,7 @@ static status_t set_volume_rpc(uint32_t device,
                                int m7xsnddriverfd)
 {
 #if LOG_SND_RPC
-    LOGD("rpc_snd_set_volume(%d, %d, %d)\n", device, method, volume);
+    LOGD("SET VOLUME: rpc_snd_set_volume(%d, %d, %d)\n", device, method, volume);
 #endif
 
     if (device == -1UL) return NO_ERROR;
@@ -1104,6 +1106,8 @@ static status_t set_volume_rpc(uint32_t device,
      args.method = method;
      args.volume = volume;
 
+     LOGD("args: device %d, method %d, volume %d", args.device, args.method, args.volume);
+
      if (ioctl(m7xsnddriverfd, SND_SET_VOLUME, &args) < 0) {
          LOGE("snd_set_volume error.");
          return -EIO;
@@ -1121,9 +1125,8 @@ status_t AudioHardware::setVoiceVolume(float v)
         v = 1.0;
     }
 
-    int vol = lrint(v * 7.0);
-    LOGD("setVoiceVolume(%f)\n", v);
-    LOGI("Setting in-call volume to %d (available range is 0 to 7)\n", vol);
+    int vol = lrint(v * 5.0); //This was set to 7, but in-call volume range is from 0 to 5 (see set_volume_rpc at line 1098) or just try to change volume level when you're in call. If you use the volume buttons you'll be able to set volume only from 0 to 5, not 7!
+    LOGD("Setting in-call volume to %d (available range is 0 to 5)\n", vol); //Read above
 
     if ((mCurSndDevice != -1) && ((mCurSndDevice == SND_DEVICE_TTY_HEADSET) || (mCurSndDevice == SND_DEVICE_TTY_VCO)))
     {
@@ -1147,6 +1150,7 @@ status_t AudioHardware::setMasterVolume(float v)
     set_volume_rpc(SND_DEVICE_BT,      SND_METHOD_VOICE, vol, m7xsnddriverfd);
     set_volume_rpc(SND_DEVICE_HEADSET, SND_METHOD_VOICE, vol, m7xsnddriverfd);
     set_volume_rpc(SND_DEVICE_STEREO_HEADSET, SND_METHOD_VOICE, vol, m7xsnddriverfd);
+    set_volume_rpc(SND_DEVICE_HEADSET_NO_MIC, SND_METHOD_VOICE, vol, m7xsnddriverfd);
     set_volume_rpc(SND_DEVICE_IN_S_SADC_OUT_HANDSET, SND_METHOD_VOICE, vol, m7xsnddriverfd);
     set_volume_rpc(SND_DEVICE_IN_S_SADC_OUT_SPEAKER_PHONE, SND_METHOD_VOICE, vol, m7xsnddriverfd);
     // We return an error code here to let the audioflinger do in-software
@@ -1177,7 +1181,7 @@ static status_t do_route_audio_rpc(uint32_t device,
         return NO_ERROR;
 
 #if LOG_SND_RPC
-    LOGD("rpc_snd_set_device(%d, %d, %d)\n", device, ear_mute, mic_mute);
+    LOGD("DO ROUTING: rpc_snd_set_device(%d, %d, %d)\n", device, ear_mute, mic_mute);
 #endif
 
     if (m7xsnddriverfd < 0) {
@@ -1232,6 +1236,7 @@ status_t AudioHardware::doAudioRouteOrMute(uint32_t device)
     /* Android < 2.0 uses MODE_IN_CALL for routing audio to earpiece */
     /* Android >= 2.0 advises to use STREAM_VOICE_CALL streams and setSpeakerphoneOn() */
     /* Android >= 2.3 uses MODE_IN_COMMUNICATION for SIP calls */
+
     bool mute = !isInCall();
     if(mute && (device == SND_DEVICE_HANDSET)) {
         /* workaround to emulate Android >= 2.0 behaviour */
@@ -1267,7 +1272,6 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input)
 
     if (input != NULL) {
         uint32_t inputDevice = input->devices();
-        LOGI("do input routing device %x\n", inputDevice);
         mBuiltinMicSelected = (inputDevice == AudioSystem::DEVICE_IN_BUILTIN_MIC);
         // ignore routing device information when we start a recording in voice
         // call
@@ -1352,8 +1356,9 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input)
                 LOGI("Routing audio to FM Headset\n");
                 new_snd_device = SND_DEVICE_STEREO_HEADSET_FMRADIO;
             } else {
-                LOGI("Routing audio to Wired Headset\n");
-                new_snd_device = SND_DEVICE_STEREO_HEADSET;
+                /* Previously it was routed to SND_DEVICE_STEREO_HEADSET only. But this device uses Headset with mic only, so if headphones are used, the other person in line won't be able to hear us when in call. But SND_DEVICE_HEADSET_NO_MIC decrease a lot the volume while not in call. So, the audio will be routed according to phone status, if in call, it is routed to SND_DEVICE_HEADSET_NO_MIC, otherwise, it will be routed to SND_DEVICE_STEREO_HEADSET.*/
+                LOGI("Routing audio to No microphone Wired Headset. Being %s in-call routing device will be %s\n", mMode == AudioSystem::MODE_IN_CALL ? "\b" : "not", mMode == AudioSystem::MODE_IN_CALL ? "SND_DEVICE_HEADSET_NO_MIC" : "SND_DEVICE_STEREO_HEADSET");
+                new_snd_device = mMode == AudioSystem::MODE_IN_CALL ? SND_DEVICE_HEADSET_NO_MIC : SND_DEVICE_STEREO_HEADSET;
             }
             new_post_proc_feature_mask = (ADRC_ENABLE | EQ_ENABLE | RX_IIR_ENABLE | MBADRC_ENABLE);
         } else if (outputDevices & AudioSystem::DEVICE_OUT_SPEAKER) {
@@ -1387,7 +1392,7 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input)
     }
 
     if ((new_snd_device != -1 && new_snd_device != mCurSndDevice) || mFmRadioEnabled != mFmPrev) {
-        ret = doAudioRouteOrMute(new_snd_device);
+       ret = doAudioRouteOrMute(new_snd_device);
 
        //disable post proc first for previous session
        if(playback_in_progress)
@@ -1661,7 +1666,7 @@ status_t AudioHardware::AudioStreamOutMSM72xx::setParameters(const String8& keyV
     if (param.getInt(key, device) == NO_ERROR) {
         mDevices = device;
         LOGV("set output routing %x", mDevices);
-	status = mHardware->setParameters(keyValuePairs);
+	    status = mHardware->setParameters(keyValuePairs);
         status = mHardware->doRouting(NULL);
         param.remove(key);
     }
